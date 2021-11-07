@@ -59,7 +59,7 @@ Las rutas relativas tiene como prefijo un punto `.`, que indica el _directorio a
 
 Cuando se usan rutas relativas con `fs`, la ruta no es relativa a la ubicacion del script, sino es relativa al directorio en el que se encontraba cuando se ejecuto el comando `node script.js` para ejecutar el script.
 
-> > Debemos tener en cuenta que este comportamiento de rutas relativas en el modulo `fs` es diferente al de `require`.
+> > Debemos tener en cuenta que este comportamiento de rutas relativas en el modulo `fs` es diferente al de `require`. Con `fs` la ruta es relativa al directorio de trabajo donde se ejecuta el programa, mientras que con `require` la ruta o path es relativa a la ubicacion del script.
 
 Debemos estar muy pendiente de como especificamos las rutas relativas, nos pueden sorprender los resultados cuando los archivos se leen o escriben desde ubicaciones no esperadas.
 
@@ -165,6 +165,225 @@ Las funciones de AWS Lambda funcionan de manera similar, los archivos creados du
 
 Por esta razon, no se recomienda almacenar estados de larga duracion o cargas de usuarios como archivos creados en tiempo de ejecucion en un host con sistema de archivos efimero. El host en la plataforma que elijamos debe poder decirnos si el sistema de archivos de la app es persistente o efimero.
 
-### Notas
+## Leer y escribir archivos JSON con Node.js
+
+Cuando deseamos almacenar datos entre reinicios del servidor con node, los archivos JSON son una muy buena opcion, ya sea para leer archivos de configuracion o persistiendo datos para la aplicacion, ademas Node tiene algunas utilidades integradas que facilitan la lectura y escritura de estos archivos JSON. Ademas puede ser una fora util de conservar los datos. Ademas podemos convertir JSON a objetos JS y viceversa.
+
+Supongamos que tenemos un ecommerce y en disco hay guardado un archivo `customer.json` que tiene el registro de un cliente para la tienda.
+
+Necesitamos acceder a la direccion del cliente, y luego actualizar la cantidad de pedidos despues de hacer un pedido.
+
+Entonces veamos como leer, escribir y actualizar el archivo `customer.json`.
+
+```json
+{
+    "name": "Mega Corp.",
+    "order_count": 83,
+    "address": "Infinity Loop Drive"
+}
+```
+
+### Interactuar con archivos usando el modulo fs
+
+Para interactuar con archivos con node, usamos el modulo nativo `fs`, esto lo hacemos requerirlo en nuestro codigo sin necesidad de instalarlo.
+
+```javascript
+const fs = require("fs");
+```
+
+El modulo `fs` nos da difierentes versiones sincronas y asincronas. Las sincronas bloquean la ejecucion del programa hasta que termine de acceder al sistema de archivos ya sea lectura o escritura, en cambio una funciona asincrona se ejecuta sin bloquear la ejecucion de otro codigo.
+
+Para leer y escribir archivos de forma asincrona usaremos los metodos `fs.readFile` y `fs.writeFile`. Tambien usaremos el `global JSON helper` para convertir objetos en cadenas JSON y cadenas JSON en objetos.
+
+### Leer un archivo JSON
+
+La forma mas sencilla de leer un JSON es haciendo un `require()` con la ruta del archivo JSON, y este se leera y analizara de forma sincrona en un objeto Javascript.
+
+```javascript
+const config = require("./config.json");
+```
+
+Leer archivos JSON directamente (dincronamente) con `require` tiene sus desventajas, ya que el archivo solo se leera una vez, y si lo requerimos nuevamente nos devolvera los datos almacenados en cache desde la primera vez que se ejecuto el `require`. Esta forma solo se recomienda para cargar datos estaticos como se ha explicado ya como datos de configuracion. Pero si queremos leer un archivo que esta en constante cambio en el disco como `customer.json`, necesitamos leerlo manualmente usando el metodo asincrono `fs.readFile`.
+
+### Leer un archivo usando fs.readFile
+
+Vamos usar una funcion asincrona para siempre leer el estado actual del archivo a leer, esta funcion retorna el contenido del archivo en `string` y luego lo parseamos a `Javascript object`
+
+```javascript
+const fs = require("fs");
+
+fs.readFile("./customer.json", "utf8", (err, jsonString) => {
+    if (err) {
+        console.log("La lectura del archivo fallo:", err);
+        return;
+    }
+    console.log("Datos del archivo:", jsonString);
+});
+```
+
+-   `./customer.json` es la ruta realtiva del archivo, `utf8` es un parametro opcional para especificar la codificaciion del archivo que estamos leyendo, aunque se puede omitir.
+
+-   `(err, jsonString) => {}` es la funcion callback que se ejecuta despues de que se haya leido el archivo.
+
+Ahora tenemos el contenido del archivo en una cadena JSON, pero necesitamos convertir la cadena a un objeto javascript.PAra esto usamos el metodo `JSON.parse` que toma los datos JSON y devuelve un objeto javascript.
+
+El metodo `JSON.parse` puede generar errores y bloquear nuestro programa, si se pasa una cadena JSON invalida, para evitarlo envolvemos el `JSON.parse` en una declaracion try/catch para detectar correctamente cualquier error.
+
+```javascript
+const fs = require("fs");
+
+fs.readFile("./customer.json", "utf-8", (err, jsonString) => {
+    if (err) {
+        console.log("La lectura del archivo fallo:", err);
+        return;
+    }
+    try {
+        const customer = JSON.parse(jsonString);
+        console.log("Direccion del cliente es:", customer.address);
+    } catch (err) {
+        console.err("Error al parsear JSON string:", err);
+    }
+});
+```
+
+Tambien podemos leer el archivo de forma sincrona usando el metodo `fs.readFileSync`. En lugar de recibir un callback, devuelve el contenido del archivo despues de leerlo.
+
+```javascript
+try {
+    const jsonString = fs.readFileSync("./customer.json");
+    const customer = JSON.parse(jsonString);
+} catch (err) {
+    console.log(err);
+    return;
+}
+console.log(customer.address);
+```
+
+Con este conocimiento podemos crear una funcion auxiliar reusable para leer y analizar la informacion de una archivo JSON.
+
+```javascript
+const fs = require("fs");
+
+function jsonReader(filePath, callback) {
+    fs.readFile(filePath, (err, fileData) => {
+        if (err) {
+            return callback && callback(err);
+        }
+        try {
+            const object = JSON.parse(fileData);
+            return callback && callback(null, object);
+        } catch (err) {
+            return callback && callback(err);
+        }
+    });
+}
+
+jsonReader("./customer.json", (err, customer) => {
+    if (err) {
+        console.log(err);
+        return;
+    }
+    console.log(customer.address);
+});
+```
+
+### Escribir en un archivo usando fs.writeFile
+
+Escribir un JSON en el `file system` es similar a leerlo. Usamos el metodo `fs.writeFile` para escribir de forma asincrona.
+
+Para escribir en un JSON, primero debemos crear una cadena JSON usando el metodo `JSON.stringify`, esto convierte un objeto Javascript a una cadena JSON.
+
+Vamos a crear un objeto de cliente con nuestros datos a continuacion y convertirlo en una cadena.
+
+```javascript
+const customer = {
+    name: "Nuevo cliente",
+    order_count: 0,
+    address: "cuenca City",
+};
+
+const jsonString = JSON.stringify(customer);
+console.log(jsonString);
+```
+
+> > Tener en cuenta que si intentamos escribir un objeto javascript sin convertirlo en un JSON string, el archivo estara vacio y se vera asi: `[object,object]`
+
+Una vez tenemos la datos en un string, podemos usar el metodo `fs.writeFile` para rear un nuevo archivo de cliente, para esto le pasamos la ruta, los datos a escribir, y una funcion callback que se ejecutara despues de que se escriba el archivo. Vamos a usar el nombre `newCustomer.json` si no existe lo creara, o si existe lo reemplazara.
+
+### Escribir un archivo JSON con fs.writeFile
+
+```javascript
+const fs = require("fs");
+
+const customer = {
+    name: "Nuevo cliente",
+    order_count: 0,
+    address: "cuenca City",
+};
+const jsonString = JSON.stringify(customer);
+fs.writeFile("./newCustomer.json", jsonString, (err) => {
+    if (err) {
+        console.log("Error al escribir en el archivo", err);
+    } else {
+        console.log("Se escribio en el archivo correctamente");
+    }
+});
+```
+
+Una vez que se ejecuta el callback, el archiivo se ha escrito en el disco. Tener en cuenta que solo se pasa un objeto de error, los datos del string que escribimos no se pasan al callback.
+
+Tambien podemos escribir usando la funcion sincrona con `fs.writeFileSync`:
+
+```javascript
+const jsonString = JSON.stringify(customer);
+fs.writeFileSync("./newCustomer.json", jsonString);
+```
+
+Una vez que se haya creado y escrito en el archivo, se vera asi:
+
+```json
+{ "name": "Nuevo cliente", "order_count": 0, "address": "cuenca City" }
+```
+
+El json string por defecto pone los datos en una sola linea, pero podemos arreglar esto de forma opcional pasando el numero de espacios para sangrar los datos al metodo `JSON.stringify()`.
+
+```javascript
+const jsonString = JSON.stringify(customer, null, 2);
+```
+
+Ahora el formato del archivo cambio a esto:
+
+```javascript
+{
+  "name": "Nuevo cliente",
+  "order_count": 0,
+  "address": "cuenca City"
+}
+```
+
+### Actualizar un archivo JSON
+
+Ahora que podemos leer y escribir archivos, podemos usarlos como una pequeña base de datos, si queremos actualizar informacion en el archivo JSON, podemos leer el contenido, modificar los datos, y luego volver a escribir en el archivo, usaremos la funcion jsonReader que creamos anteriormente:
+
+```javascript
+jsonReader("./customer.json", (err, customer) => {
+    if (err) {
+        console.log("Error al leer el archivo: ", err);
+        return;
+    }
+    //incrementar el numero de ordenes del cliente en 1
+    customer.order_count += 1;
+    fs.writeFile("./customer.json", JSON.stringify(customer), (err) => {
+        if (err) {
+            console.log("Error al escribir en el archivo: ", err);
+        }
+    });
+});
+```
+
+Definitivamente no es la base de datos mas eficiente, pero trabajar con archivo JSON es una forma sencilla de guardar datos de nuestro proyecto.
+
+## Notas
 
 -   Segun la documentacion de nodejs es preferible usar las versiones callbacks de los metodos `fs` antes que la version de promesas, esto cuando se requiere mayor rendimiento en terminos de tiempo de ejecucion y asignacion de memoria.
+-   JSON es ino de los tipos mas comunes con los que se trabaja en Node.js. los metodos `fs.readFile` y `fs.writeFile` son los metodos del modulo `fs` que usamos para trabajar con archivos json de forma asincrona.
